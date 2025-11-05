@@ -1,7 +1,6 @@
 const express = require('express');
 const fs = require('fs').promises;
 const path = require('path');
-ы
 const app = express();
 const PORT = 10000;
 const LOG_FILE = 'simple-mock.log';
