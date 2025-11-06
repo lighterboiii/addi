@@ -7,6 +7,22 @@ const LOG_FILE = 'simple-mock.log';
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+app.use((error, req, res, next) => {
+    const requestId = `err_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    
+    logToFile(`🚨 UNHANDLED ERROR ${requestId}:`);
+    logToFile(`   Message: ${error.message}`);
+    logToFile(`   Stack: ${error.stack}`);
+    logToFile(`   URL: ${req.method} ${req.url}`);
+    logToFile(`   Headers: ${JSON.stringify(req.headers)}`);
+    logToFile(`   Body: ${JSON.stringify(req.body, null, 2)}`);
+    
+    res.status(500).json({ 
+        error: 'Internal Server Error',
+        requestId: requestId 
+    });
+});
 // Глобальные переменные для управления поведением
 let responseConfig = {
     statusCode: 200,
