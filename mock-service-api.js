@@ -4,31 +4,18 @@ const path = require('path');
 const app = express();
 const PORT = 10000;
 const LOG_FILE = 'simple-mock.log';
+
 // Middleware
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '1mb' })); // Уменьшил лимит для тестирования
 app.use(express.urlencoded({ extended: true }));
 
-app.use((error, req, res, next) => {
-    const requestId = `err_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    
-    logToFile(`🚨 UNHANDLED ERROR ${requestId}:`);
-    logToFile(`   Message: ${error.message}`);
-    logToFile(`   Stack: ${error.stack}`);
-    logToFile(`   URL: ${req.method} ${req.url}`);
-    logToFile(`   Headers: ${JSON.stringify(req.headers)}`);
-    logToFile(`   Body: ${JSON.stringify(req.body, null, 2)}`);
-    
-    res.status(500).json({ 
-        error: 'Internal Server Error',
-        requestId: requestId 
-    });
-});
 // Глобальные переменные для управления поведением
 let responseConfig = {
     statusCode: 200,
     responseBody: { success: true, message: "Request processed successfully" },
     responseDelay: 0
 };
+
 // Функция логирования
 async function logToFile(message) {
     const timestamp = new Date().toISOString();
@@ -41,23 +28,91 @@ async function logToFile(message) {
         console.error('Ошибка логирования:', error);
     }
 }
+
+// Middleware для логирования ВСЕХ ошибок
+app.use((error, req, res, next) => {
+    const requestId = `err_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    
+    logToFile(`🚨 UNHANDLED ERROR ${requestId}:`);
+    logToFile(`   Message: ${error.message}`);
+    logToFile(`   URL: ${req.method} ${req.url}`);
+    logToFile(`   Headers: ${JSON.stringify(req.headers)}`);
+    
+    res.status(500).json({ 
+        error: 'Internal Server Error',
+        requestId: requestId 
+    });
+});
+
 // Основной endpoint для приема данных
 app.post('/api/data', async (req, res) => {
     const requestId = `req_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
-    // Логируем заголовки, тело запроса
-    await logToFile(`📥 REQUEST ${requestId}:`);
+    
+    // Валидация Content-Type
+    const contentType = req.get('Content-Type');
+    if (!contentType || !contentType.includes('application/json')) {
+        await logToFile(`🚨 INVALID CONTENT-TYPE ${requestId}: ${contentType}`);
+        return res.status(415).json({ 
+            error: 'Unsupported Media Type',
+            message: 'Content-Type must be application/json' 
+        });
+    }
+    
+    // Валидация тела запроса (Express уже отвалился бы на битом JSON)
+    if (!req.body || typeof req.body !== 'object') {
+        await logToFile(`🚨 INVALID BODY ${requestId}: Body is not JSON object`);
+        return res.status(400).json({ 
+            error: 'Bad Request', 
+            message: 'Invalid JSON body' 
+        });
+    }
+    
+    // Валидация обязательных полей
+    if (!req.body.users) {
+        await logToFile(`🚨 MISSING USERS FIELD ${requestId}`);
+        return res.status(400).json({ 
+            error: 'Bad Request', 
+            message: 'Missing required field: users' 
+        });
+    }
+
+    if (!Array.isArray(req.body.users)) {
+        await logToFile(`🚨 INVALID USERS FORMAT ${requestId}: users is not array`);
+        return res.status(400).json({ 
+            error: 'Bad Request', 
+            message: 'Users must be an array' 
+        });
+    }
+
+    // Валидация структуры пользователей
+    for (let i = 0; i < req.body.users.length; i++) {
+        const user = req.body.users[i];
+        if (!user.login || typeof user.login !== 'string') {
+            await logToFile(`🚨 INVALID USER ${requestId}: user[${i}] missing login`);
+            return res.status(400).json({ 
+                error: 'Bad Request', 
+                message: `User at index ${i} missing required field: login` 
+            });
+        }
+    }
+
+    // Логируем валидный запрос
+    await logToFile(`📥 VALID REQUEST ${requestId}:`);
     await logToFile(`   Headers: ${JSON.stringify(req.headers)}`);
     await logToFile(`   Body: ${JSON.stringify(req.body, null, 2)}`);
+    
     // Имитируем задержку если нужно
     if (responseConfig.responseDelay > 0) {
         await logToFile(`   ⏳ Delaying response by ${responseConfig.responseDelay}ms`);
         await new Promise(resolve => setTimeout(resolve, responseConfig.responseDelay));
     }
+    
     // Отправляем сконфигурированный ответ
     await logToFile(`📤 Ответ ${requestId}: Статус ${responseConfig.statusCode}, Body: ${JSON.stringify(responseConfig.responseBody)}`);
 
     res.status(responseConfig.statusCode).json(responseConfig.responseBody);
 });
+
 // Endpoint для управления поведением мока
 app.post('/mock/control', async (req, res) => {
     const { statusCode, responseBody, responseDelay } = req.body;
@@ -81,6 +136,7 @@ app.post('/mock/control', async (req, res) => {
         config: responseConfig
     });
 });
+
 // Endpoint для проверки статуса
 app.get('/mock/status', (req, res) => {
     res.json({
@@ -89,6 +145,7 @@ app.get('/mock/status', (req, res) => {
         config: responseConfig
     });
 });
+
 // Endpoint для просмотра логов
 app.get('/mock/logs', async (req, res) => {
     try {
@@ -98,6 +155,7 @@ app.get('/mock/logs', async (req, res) => {
         res.status(404).json({ error: 'Log file not found' });
     }
 });
+
 // Endpoint для очистки логов
 app.delete('/mock/logs', async (req, res) => {
     try {
@@ -108,16 +166,17 @@ app.delete('/mock/logs', async (req, res) => {
         res.status(500).json({ error: 'Failed to clear logs' });
     }
 });
+
 // GET endpoint - минимальное логирование
 app.get('*', (req, res) => {
     logToFile(`🔍 GET REQUEST: ${req.path}`);
-
     res.json({
         message: "Mock API is running",
         path: req.path,
         timestamp: new Date().toISOString()
     });
 });
+
 // Запуск сервера
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 Simple Mock API Server running on ${PORT}`);
@@ -131,9 +190,20 @@ app.listen(PORT, '0.0.0.0', () => {
     console.log(`Status: ${responseConfig.statusCode}`);
     console.log(`Delay: ${responseConfig.responseDelay}ms`);
 });
+
 // Обработка graceful shutdown
 process.on('SIGINT', async () => {
     await logToFile('🛑 Server shutdown');
     console.log('\n🛑 Mock server stopped');
     process.exit(0);
+});
+
+// Обработчики необработанных исключений
+process.on('uncaughtException', (error) => {
+    logToFile(`💀 UNCAUGHT EXCEPTION: ${error.message}`);
+    logToFile(`   Stack: ${error.stack}`);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    logToFile(`🤯 UNHANDLED REJECTION: ${reason}`);
 });
